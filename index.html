@@ -379,7 +379,7 @@ function drawDunes(speed, color, baseOff, freq){
   ctx.moveTo(0, gy);
   for(let x=0; x<=W+10; x+=10){
     const wx = x - off;
-    const h = 22 + Math.sin(wx*freq)*14 + Math.sin(wx*freq*2.7)*7 + Math.cos(wx*freq*0.6+baseOff)*9;
+    const h = 12 + Math.sin(wx*freq)*8 + Math.sin(wx*freq*2.7)*4 + Math.cos(wx*freq*0.6+baseOff)*5;
     ctx.lineTo(x, gy - h);
   }
   ctx.lineTo(W,gy); ctx.closePath(); ctx.fill();
