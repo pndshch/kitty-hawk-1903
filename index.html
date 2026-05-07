@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#cdb892">
+<title>キティホーク 1903 / Kitty Hawk 1903</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none}
+html,body{height:100%;overflow:hidden;background:#cdb892;font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans','Yu Gothic UI',sans-serif;color:#3a2c1a;touch-action:none}
+#wrap{position:fixed;inset:0;display:flex;flex-direction:column}
+#hud{position:absolute;top:0;left:0;right:0;padding:10px 14px;display:flex;justify-content:space-between;align-items:flex-start;pointer-events:none;z-index:5;font-size:13px;font-weight:700;letter-spacing:.5px}
+.hud-box{background:rgba(58,44,26,.78);color:#f5e9d4;padding:6px 10px;border-radius:4px;line-height:1.2;font-feature-settings:"tnum"}
+#hud .right{text-align:right}
+#hud .row{display:flex;gap:8px;flex-wrap:wrap}
+#lang{position:absolute;top:10px;left:50%;transform:translateX(-50%);background:rgba(245,233,212,.9);border:1px solid #3a2c1a;border-radius:4px;padding:4px 8px;font-size:11px;font-weight:800;cursor:pointer;z-index:6;pointer-events:auto;letter-spacing:.5px}
+#game{display:block;width:100%;height:100%;touch-action:none;cursor:pointer}
+.overlay{position:absolute;inset:0;background:rgba(58,44,26,.92);color:#f5e9d4;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:20px;z-index:10;backdrop-filter:blur(2px)}
+.overlay h1{font-size:28px;letter-spacing:1px;margin-bottom:6px;line-height:1.15}
+.overlay h2{font-size:24px;margin-bottom:10px;line-height:1.2}
+.overlay .sub{font-size:13px;opacity:.8;margin-bottom:18px;line-height:1.5;max-width:340px;font-weight:500}
+.overlay .body{font-size:13px;line-height:1.6;max-width:340px;margin-bottom:16px}
+.overlay .body strong{color:#ffd479}
+.overlay .stats{font-family:'SF Mono',Menlo,monospace;font-size:14px;line-height:1.7;background:rgba(245,233,212,.08);padding:12px 16px;border-radius:6px;margin-bottom:18px;text-align:left}
+.overlay .stats .lab{opacity:.7;display:inline-block;width:90px}
+.overlay .stars{font-size:32px;letter-spacing:6px;margin-bottom:14px;color:#ffd479}
+.overlay .rank{font-size:14px;font-weight:800;color:#ffd479;margin-bottom:18px;text-transform:uppercase;letter-spacing:1px}
+.overlay button{background:#f5e9d4;color:#3a2c1a;border:none;border-radius:6px;padding:12px 24px;font-size:15px;font-weight:800;letter-spacing:1px;cursor:pointer;font-family:inherit}
+.overlay button:active{transform:translateY(1px)}
+.overlay .small{font-size:11px;opacity:.55;margin-top:14px;line-height:1.5;max-width:300px}
+.overlay .controls{font-size:14px;font-weight:700;background:rgba(255,212,121,.15);border:1px solid #ffd479;padding:10px 14px;border-radius:6px;margin-bottom:14px;color:#ffd479}
+.overlay .targets{font-size:12px;line-height:1.7;text-align:left;margin-bottom:18px;max-width:280px}
+.overlay .targets .y{color:#ffd479;font-weight:800}
+#stallWarn{position:absolute;left:50%;top:42%;transform:translateX(-50%);background:#c0392b;color:#fff;font-weight:900;padding:8px 18px;border-radius:4px;font-size:18px;letter-spacing:2px;display:none;z-index:4;animation:pulse .35s ease-in-out infinite alternate;pointer-events:none}
+@keyframes pulse{from{transform:translateX(-50%) scale(1)}to{transform:translateX(-50%) scale(1.08)}}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game"></canvas>
+  <div id="hud" class="hidden">
+    <div class="hud-box" id="hudL">
+      <div data-en="DIST" data-ja="きょり">きょり</div>
+      <div id="distVal" style="font-size:18px">0 ft</div>
+    </div>
+    <div class="hud-box right" id="hudR">
+      <div data-en="TIME" data-ja="じかん">じかん</div>
+      <div id="timeVal" style="font-size:18px">0.0 s</div>
+    </div>
+  </div>
+  <button id="lang">JA / EN</button>
+  <div id="stallWarn" data-en="STALL!" data-ja="しっそく！">しっそく！</div>
+
+  <div class="overlay" id="startScreen">
+    <h1 data-en="Kitty Hawk 1903" data-ja="キティホーク 1903">キティホーク 1903</h1>
+    <p class="sub" data-en="December 17, 1903 — 10:35 AM<br>The first powered, sustained, controlled flight"
+       data-ja="1903ねん 12がつ 17にち 10:35<br>はじめての うごく ひこうき">1903ねん 12がつ 17にち 10:35<br>はじめての うごく ひこうき</p>
+    <div class="body" data-en="The Wright Flyer is on a wooden launching rail at Kill Devil Hills. A 27 mph headwind blows in from the Atlantic. The forward elevator makes the plane <strong>pitch-unstable</strong> — it wants to porpoise. Keep it level and you fly. Lose pitch and you stall."
+                    data-ja="ライト兄弟（きょうだい）の <strong>「フライヤー号」</strong> が レールに のっている。<strong>27マイル の むかい風</strong>。まえに ある かじ で 上下（じょうげ）が ふらふら——ピッチが ぐらつくと <strong>しっそく</strong>。じっと 水平（すいへい）を たもって とぼう。">ライト兄弟（きょうだい）の <strong>「フライヤー号」</strong> が レールに のっている。<strong>27マイル の むかい風</strong>。まえに ある かじ で 上下（じょうげ）が ふらふら——ピッチが ぐらつくと <strong>しっそく</strong>。じっと 水平（すいへい）を たもって とぼう。</div>
+    <div class="controls" data-en="◉  TAP &amp; HOLD to PITCH UP<br>RELEASE to NOSE DOWN"
+                          data-ja="◉ おしっぱなし → きしゅ あげ<br>はなす → きしゅ さげ">◉ おしっぱなし → きしゅ あげ<br>はなす → きしゅ さげ</div>
+    <div class="targets">
+      <div data-en="<span class='y'>120 ft</span> — Orville, Flight 1 (12 sec)" data-ja="<span class='y'>120フィート</span>（37m）— オービル, 1かいめ（12びょう）">
+        <span class='y'>120フィート</span>（37m）— オービル, 1かいめ（12びょう）
+      </div>
+      <div data-en="<span class='y'>175 ft</span> — Wilbur, Flight 2" data-ja="<span class='y'>175フィート</span> — ウィルバー, 2かいめ">
+        <span class='y'>175フィート</span> — ウィルバー, 2かいめ
+      </div>
+      <div data-en="<span class='y'>200 ft</span> — Orville, Flight 3" data-ja="<span class='y'>200フィート</span> — オービル, 3かいめ">
+        <span class='y'>200フィート</span> — オービル, 3かいめ
+      </div>
+      <div data-en="<span class='y'>852 ft</span> — Wilbur, Flight 4 (59 sec)" data-ja="<span class='y'>852フィート</span>（260m）— ウィルバー, 4かいめ（59びょう）">
+        <span class='y'>852フィート</span>（260m）— ウィルバー, 4かいめ（59びょう）
+      </div>
+    </div>
+    <button id="startBtn" data-en="START" data-ja="はじめる">はじめる</button>
+    <div class="small" data-en="A gust caught the Flyer after Flight 4 and broke it. It never flew again — but the world had changed."
+                       data-ja="4かいめ の あと、つよい かぜ が フライヤー号 を ふきとばし、こわれた。にどと とばなかった——でも せかい は かわった。">4かいめ の あと、つよい かぜ が フライヤー号 を ふきとばし、こわれた。にどと とばなかった——でも せかい は かわった。</div>
+  </div>
+
+  <div class="overlay hidden" id="endScreen">
+    <h2 id="endTitle">—</h2>
+    <div class="rank" id="endRank">—</div>
+    <div class="stars" id="endStars">—</div>
+    <div class="stats">
+      <div><span class="lab" data-en="DISTANCE" data-ja="きょり">きょり</span><span id="finalDist">— ft</span></div>
+      <div><span class="lab" data-en="TIME" data-ja="じかん">じかん</span><span id="finalTime">— s</span></div>
+      <div><span class="lab" data-en="MATCHED" data-ja="きろく">きろく</span><span id="matched">—</span></div>
+    </div>
+    <button id="retryBtn" data-en="TRY AGAIN" data-ja="もういちど">もういちど</button>
+    <div class="small" id="endNote"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+//===== language =====//
+let lang = (navigator.language||"").startsWith("ja") ? "ja" : "ja"; // default JA
+function applyLang(){
+  document.documentElement.lang = lang;
+  document.querySelectorAll("[data-ja]").forEach(el=>{
+    const v = el.getAttribute("data-"+lang);
+    if(v!=null) el.innerHTML = v;
+  });
+  document.getElementById("lang").textContent = lang==="ja" ? "JA / EN" : "EN / JA";
+}
+document.getElementById("lang").addEventListener("click",()=>{
+  lang = lang==="ja" ? "en" : "ja";
+  applyLang();
+});
+applyLang();
+
+//===== canvas =====//
+const cv = document.getElementById("game");
+const ctx = cv.getContext("2d");
+let W=0, H=0, DPR = Math.max(1, Math.min(2, window.devicePixelRatio||1));
+function resize(){
+  W = window.innerWidth; H = window.innerHeight;
+  cv.width = Math.floor(W*DPR); cv.height = Math.floor(H*DPR);
+  cv.style.width = W+"px"; cv.style.height = H+"px";
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+}
+window.addEventListener("resize",resize); resize();
+
+//===== world & physics =====//
+// Units: meters and seconds internally. Display feet.
+// Coordinate: world x increases as plane goes right; y is altitude (positive = up).
+const M_TO_FT = 3.28084;
+const RAIL_LEN_M = 18;      // launching rail in meters (~60 ft)
+const RAIL_THRUST = 6.0;    // accel down rail (m/s²)
+const CRUISE_VX = 6.4;      // ground speed once airborne (~14 mph; Wright record was similar)
+const CRUISE_BUILD = 1.5;   // /sec rate at which vx settles toward CRUISE_VX
+const TARGET_VY_UP = 3.4;   // target vy when player holds (climb)
+const TARGET_VY_DOWN = -2.6; // target vy on release (sink)
+const VY_LERP = 3.0;        // /sec target tracking rate
+const STALL_PITCH = 22;     // degrees - above this, lift collapses
+const PITCH_FROM_VY = 4.0;  // converts vy (m/s) to pitch angle factor
+const LAUNCH_VY = 3.0;      // initial upward velocity off the rail
+
+// Game state
+const S = {
+  phase: "menu",       // menu | launching | done
+  t: 0,
+  px: 0, py: 0,        // position (m)
+  vx: 0, vy: 0,        // velocity (m/s)
+  pitch: 0,            // degrees (positive nose up)
+  pressing: false,
+  onRail: true,
+  stalled: false,
+  stallTime: 0,
+  cameraX: 0,
+  flightStartT: 0,
+  flightStartX: 0,
+  pitchOscPhase: 0,
+  pendingGust: 0,
+};
+
+function reset(){
+  S.phase = "launching";
+  S.t = 0;
+  S.px = 4; S.py = 0.05; // sit on rail
+  S.vx = 0; S.vy = 0;
+  S.pitch = 1;
+  S.pressing = false;
+  S.onRail = true;
+  S.stalled = false;
+  S.stallTime = 0;
+  S.cameraX = 0;
+  S.flightStartT = 0;
+  S.flightStartX = 0;
+  S.pitchOscPhase = 0;
+  S.pendingGust = 0;
+  document.getElementById("hud").classList.remove("hidden");
+  document.getElementById("startScreen").classList.add("hidden");
+  document.getElementById("endScreen").classList.add("hidden");
+  document.getElementById("stallWarn").style.display="none";
+}
+
+document.getElementById("startBtn").addEventListener("click",reset);
+document.getElementById("retryBtn").addEventListener("click",reset);
+
+// Input: pointer down anywhere on canvas/wrap
+function press(){ if(S.phase==="launching"||S.phase==="flying") S.pressing=true; }
+function release(){ S.pressing=false; }
+window.addEventListener("pointerdown",e=>{
+  if(e.target.id==="lang" || e.target.id==="startBtn" || e.target.id==="retryBtn") return;
+  press();
+});
+window.addEventListener("pointerup",release);
+window.addEventListener("pointercancel",release);
+window.addEventListener("keydown",e=>{ if(e.code==="Space"||e.code==="ArrowUp"){ press(); e.preventDefault(); } });
+window.addEventListener("keyup",e=>{ if(e.code==="Space"||e.code==="ArrowUp") release(); });
+
+//===== physics step =====//
+function step(dt){
+  if(S.phase==="menu") return;
+
+  S.t += dt;
+
+  //------ ON RAIL: accelerate down launching track ------//
+  if(S.onRail){
+    S.vx += RAIL_THRUST * dt;
+    S.vx -= S.vx*0.04*dt;       // small rail friction
+    S.px += S.vx*dt;
+    S.py = 0.05;
+    S.vy = 0;
+    S.pitch = 1;
+    if(S.px >= RAIL_LEN_M){
+      S.onRail = false;
+      S.flightStartT = S.t;
+      S.flightStartX = S.px;
+      S.vy = LAUNCH_VY;
+    }
+    document.getElementById("distVal").textContent = "0 ft";
+    document.getElementById("timeVal").textContent = "0.0 s";
+    return;
+  }
+
+  //------ AIRBORNE: target-tracking arcade model ------//
+  // Settle ground speed toward CRUISE_VX
+  S.vx += (CRUISE_VX - S.vx) * CRUISE_BUILD * dt;
+
+  // Random wind gusts: occasional, perturb vy
+  if(Math.random() < 0.018) S.pendingGust = (Math.random()-0.5) * 2.5;
+  S.pendingGust = (S.pendingGust||0) * 0.92;
+
+  // Target vy depends on press. Pressing lifts plane; releasing lets it sink.
+  const targetVy = S.pressing ? TARGET_VY_UP : TARGET_VY_DOWN;
+  S.vy += (targetVy - S.vy) * VY_LERP * dt;
+  S.vy += S.pendingGust * dt * 1.0;
+  S.vy = Math.max(-6, Math.min(5.5, S.vy));
+
+  // Visual pitch follows climb direction (clamped softly)
+  const visualPitch = Math.max(-25, Math.min(28, S.vy * PITCH_FROM_VY));
+  S.pitch += (visualPitch - S.pitch) * 7.0 * dt;
+
+  // Stall: only triggers from explicit gust spikes (vy > 5.0 sustained)
+  const stalled = S.vy > 4.8 && S.stallBuildup > 0.5;
+  S.stallBuildup = (S.stallBuildup||0) + (S.vy > 4.5 ? dt : -dt*1.5);
+  S.stallBuildup = Math.max(0, S.stallBuildup);
+  S.stalled = stalled;
+  if(stalled){
+    S.stallTime += dt;
+    S.vy -= 6 * dt;  // lift collapse
+  } else {
+    S.stallTime = Math.max(0, S.stallTime - dt*0.6);
+  }
+
+  S.py += S.vy * dt;
+  S.px += S.vx * dt;
+
+  // Ground collision
+  if(S.py <= 0.04){
+    S.py = 0;
+    const airborneT = S.t - S.flightStartT;
+    if(S.vy < -3.5 || S.stallTime > 0.5){
+      endRun("crash");
+    } else if(airborneT > 0.4){
+      endRun("land");
+    } else {
+      S.vy = 0;
+    }
+  }
+
+  // Ceiling — Wright Flyer stayed under ~10 ft
+  if(S.py > 7){ S.py = 7; if(S.vy>0) S.vy = 0; }
+
+  // Camera
+  const wx = worldToScreenScale();
+  const targetCam = Math.max(0, S.px*wx - W*0.30);
+  S.cameraX += (targetCam - S.cameraX) * 0.12;
+
+  // HUD
+  const distFt = Math.max(0, (S.px - (S.flightStartX || RAIL_LEN_M)) * M_TO_FT);
+  const flightTime = S.t - S.flightStartT;
+  document.getElementById("distVal").textContent = Math.floor(distFt) + " ft";
+  document.getElementById("timeVal").textContent = flightTime.toFixed(1) + " s";
+  const sw = document.getElementById("stallWarn");
+  sw.style.display = stalled ? "block" : "none";
+}
+
+function endRun(kind){
+  S.phase = "done";
+  const distFt = Math.max(0, (S.px - (S.flightStartX || RAIL_LEN_M)) * M_TO_FT);
+  const flightT = S.onRail ? 0 : (S.t - S.flightStartT);
+  let stars=0, matched, rank;
+  if(distFt >= 852){ stars=3; matched=lang==="ja"?"ウィルバー 4かいめ ★":"Wilbur, Flight 4 ★"; rank=lang==="ja"?"でんせつ":"LEGEND"; }
+  else if(distFt >= 200){ stars=3; matched=lang==="ja"?"オービル 3かいめ":"Orville, Flight 3"; rank=lang==="ja"?"パイロット":"AVIATOR"; }
+  else if(distFt >= 175){ stars=2; matched=lang==="ja"?"ウィルバー 2かいめ":"Wilbur, Flight 2"; rank=lang==="ja"?"パイロット":"AVIATOR"; }
+  else if(distFt >= 120){ stars=2; matched=lang==="ja"?"オービル 1かいめ":"Orville, Flight 1"; rank=lang==="ja"?"パイオニア":"PIONEER"; }
+  else if(distFt >= 50){  stars=1; matched=lang==="ja"?"はばたき":"first hop"; rank=lang==="ja"?"なんとか":"BARELY"; }
+  else { stars=0; matched=lang==="ja"?"レール の はし":"end of rail"; rank=lang==="ja"?"こわれた":"BUSTED"; }
+
+  document.getElementById("finalDist").textContent = Math.floor(distFt)+" ft  ("+(distFt/M_TO_FT).toFixed(1)+" m)";
+  document.getElementById("finalTime").textContent = flightT.toFixed(1)+" s";
+  document.getElementById("matched").textContent = matched;
+  document.getElementById("endStars").textContent = "★★★★".slice(0,stars).padEnd(3,"☆").slice(0,3);
+  document.getElementById("endRank").textContent = rank;
+  document.getElementById("endTitle").textContent = kind==="crash" ? (lang==="ja"?"ついらく":"CRASHED") : (lang==="ja"?"ちゃくりく":"LANDED");
+  const note = (kind==="crash")
+    ? (lang==="ja" ? "うまく ピッチを たもてば、もっと とべる。" : "Hold pitch steady to fly farther.")
+    : (distFt >= 852 ? (lang==="ja"?"ウィルバーの 1903ねんの きろく(852フィート)に ならんだ。":"You matched Wilbur's 1903 record (852 ft).") :
+       (lang==="ja"?"もう一度 ためそう。":"Try again to match a Wright flight."));
+  document.getElementById("endNote").textContent = note;
+  document.getElementById("endScreen").classList.remove("hidden");
+}
+
+//===== drawing =====//
+function worldToScreenScale(){
+  // 1 meter = ~7 px on phones, up to 11 on tablets. Tuned for visible plane + dunes.
+  return Math.max(7, Math.min(11, W/72));
+}
+function worldToScreen(wx, wy){
+  const s = worldToScreenScale();
+  const groundY = H - Math.max(70, H*0.18);
+  return {
+    x: wx*s - S.cameraX,
+    y: groundY - wy*s,
+    s
+  };
+}
+function screenGroundY(){ return H - Math.max(70, H*0.18); }
+
+function drawBackground(){
+  // Sky gradient
+  const sky = ctx.createLinearGradient(0,0,0,H);
+  sky.addColorStop(0,"#b9d8e8");
+  sky.addColorStop(0.6,"#e6dfb8");
+  sky.addColorStop(1,"#cdb892");
+  ctx.fillStyle = sky;
+  ctx.fillRect(0,0,W,H);
+
+  // Distant ocean strip
+  const gy = screenGroundY();
+  ctx.fillStyle = "#9ec5cc";
+  ctx.fillRect(0,gy-30,W,8);
+  // shimmer marks
+  ctx.fillStyle = "rgba(255,255,255,.4)";
+  for(let i=0;i<W;i+=20){
+    const x = (i + (S.cameraX*0.05)%20);
+    ctx.fillRect(x,gy-29+(i%2?2:4),6,1);
+  }
+
+  // Sand dunes (parallax layers)
+  drawDunes(0.3, "#a48962", -10, 0.018);
+  drawDunes(0.55, "#b89867", -2, 0.022);
+
+  // Wind streaks
+  ctx.strokeStyle = "rgba(255,255,255,.35)";
+  ctx.lineWidth = 1;
+  const windOff = (S.t * 200) % 60;
+  for(let y=10; y<gy-40; y+=24){
+    for(let x=-windOff; x<W; x+=60){
+      ctx.beginPath();
+      const len = 12 + ((x*y)%14);
+      ctx.moveTo(x,y); ctx.lineTo(x+len, y+1);
+      ctx.stroke();
+    }
+  }
+
+  // Ground (sand)
+  ctx.fillStyle = "#cdb892";
+  ctx.fillRect(0,gy,W,H-gy);
+  // Sand grains pattern
+  ctx.fillStyle = "rgba(58,44,26,.10)";
+  for(let i=0;i<160;i++){
+    const sx = (i*53 + Math.floor(S.cameraX*0.6)) % (W+200) - 100;
+    const sy = gy + (i*37)%(H-gy);
+    ctx.fillRect(sx,sy,2,1);
+  }
+}
+
+function drawDunes(speed, color, baseOff, freq){
+  const gy = screenGroundY();
+  const off = -S.cameraX * speed;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(0, gy);
+  for(let x=0; x<=W+10; x+=10){
+    const wx = x - off;
+    const h = 22 + Math.sin(wx*freq)*14 + Math.sin(wx*freq*2.7)*7 + Math.cos(wx*freq*0.6+baseOff)*9;
+    ctx.lineTo(x, gy - h);
+  }
+  ctx.lineTo(W,gy); ctx.closePath(); ctx.fill();
+}
+
+function drawRail(){
+  // The wooden launching rail at world x: 0 .. RAIL_LEN_M
+  const a = worldToScreen(0, 0.05);
+  const b = worldToScreen(RAIL_LEN_M, 0.05);
+  if(b.x < -50 || a.x > W+50) return;
+  ctx.strokeStyle = "#5a3f24";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+  // tie ties under rail
+  ctx.fillStyle = "#5a3f24";
+  for(let i=0;i<=RAIL_LEN_M;i+=2){
+    const p = worldToScreen(i, 0.02);
+    ctx.fillRect(p.x-4, p.y, 8, 3);
+  }
+}
+
+function drawDistanceMarkers(){
+  const targets = [
+    {ft:120, lab:"120ft"},
+    {ft:175, lab:"175ft"},
+    {ft:200, lab:"200ft"},
+    {ft:500, lab:"500ft"},
+    {ft:852, lab:"852ft ★"},
+    {ft:1000, lab:"1000ft"},
+  ];
+  const startX = S.flightStartX || RAIL_LEN_M;
+  for(const t of targets){
+    const wx = startX + t.ft/M_TO_FT;
+    const p = worldToScreen(wx, 0);
+    if(p.x < -40 || p.x > W+10) continue;
+    ctx.strokeStyle = t.ft===852 ? "#c0392b" : "#7a5a2a";
+    ctx.lineWidth = t.ft===852 ? 2 : 1;
+    ctx.setLineDash([4,3]);
+    ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x, p.y-50); ctx.stroke();
+    ctx.setLineDash([]);
+    // flag
+    ctx.fillStyle = t.ft===852 ? "#c0392b" : "#7a5a2a";
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y-50); ctx.lineTo(p.x+18, p.y-46); ctx.lineTo(p.x, p.y-42); ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#3a2c1a";
+    ctx.font = "bold 11px ui-monospace, monospace";
+    ctx.fillText(t.lab, p.x+4, p.y-30);
+  }
+}
+
+function drawFlyer(){
+  const p = worldToScreen(S.px, S.py);
+  const s = p.s;
+  const pitchR = -S.pitch * Math.PI/180; // screen y is inverted
+  // Plane center at p.x, p.y. Scale by s.
+  const px = p.x, py = p.y - 0.4*s;
+  ctx.save();
+  ctx.translate(px, py);
+  ctx.rotate(pitchR);
+
+  // Wing chord ~2 m, span ~12 m (40 ft). Drawn side-on so we see chord.
+  // Drawing in plane-local coords: x = forward, y = up; px ~ s per meter
+  const m = s; // px per meter
+  // Lower wing (cambered line from -1 to +1)
+  ctx.strokeStyle = "#6b4a26";
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(-1.0*m, 0);
+  ctx.quadraticCurveTo(0, -0.18*m, 1.0*m, 0);
+  ctx.stroke();
+  // Upper wing
+  ctx.beginPath();
+  ctx.moveTo(-1.0*m, -1.6*m);
+  ctx.quadraticCurveTo(0, -1.78*m, 1.0*m, -1.6*m);
+  ctx.stroke();
+  // Wing struts (5)
+  for(let i=-1; i<=1; i+=0.5){
+    ctx.beginPath();
+    ctx.moveTo(i*m, 0);
+    ctx.lineTo(i*m, -1.6*m);
+    ctx.stroke();
+  }
+
+  // Forward canard elevator (in front, ~2m forward)
+  // It tilts in response to player input: positive when pitching up
+  const elevTilt = S.pressing ? 1 : 0; // 0..1
+  const eang = -elevTilt * 0.4;
+  ctx.save();
+  ctx.translate(2.2*m, -0.4*m);
+  ctx.rotate(eang);
+  ctx.strokeStyle = "#5a3f24";
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.moveTo(-0.4*m, 0); ctx.lineTo(0.4*m, 0);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(-0.4*m, -0.3*m); ctx.lineTo(0.4*m, -0.3*m);
+  ctx.stroke();
+  // struts
+  ctx.beginPath();
+  ctx.moveTo(-0.4*m, 0); ctx.lineTo(-0.4*m, -0.3*m);
+  ctx.moveTo(0.4*m, 0);  ctx.lineTo(0.4*m, -0.3*m);
+  ctx.stroke();
+  ctx.restore();
+  // boom from main wing to canard
+  ctx.strokeStyle = "#5a3f24";
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(1.0*m, -0.05*m); ctx.lineTo(2.2*m, -0.5*m);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(1.0*m, -1.55*m); ctx.lineTo(2.2*m, -0.7*m);
+  ctx.stroke();
+
+  // Tail rudder (vertical) at back, ~2m behind
+  ctx.save();
+  ctx.translate(-2.0*m, -0.5*m);
+  ctx.strokeStyle = "#5a3f24";
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(0, 0.2*m); ctx.lineTo(0, -0.5*m);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(-0.25*m, 0.2*m); ctx.lineTo(-0.25*m, -0.5*m);
+  ctx.stroke();
+  ctx.restore();
+  ctx.beginPath();
+  ctx.moveTo(-1.0*m, -0.05*m); ctx.lineTo(-2.0*m, -0.4*m);
+  ctx.moveTo(-1.0*m, -1.55*m); ctx.lineTo(-2.0*m, -0.6*m);
+  ctx.strokeStyle = "#5a3f24";
+  ctx.stroke();
+
+  // Pilot lying prone on lower wing
+  ctx.fillStyle = "#3a2c1a";
+  ctx.beginPath();
+  ctx.ellipse(-0.05*m, -0.18*m, 0.55*m, 0.13*m, 0, 0, Math.PI*2);
+  ctx.fill();
+  // Pilot's cap
+  ctx.fillStyle = "#1f1610";
+  ctx.beginPath();
+  ctx.ellipse(0.4*m, -0.22*m, 0.16*m, 0.12*m, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  // Engine box (small) right of pilot
+  ctx.fillStyle = "#2a1f12";
+  ctx.fillRect(0.18*m, -0.32*m, 0.28*m, 0.18*m);
+
+  // Propellers (two pusher props behind wings) — animated
+  const propPhase = S.t * 22;
+  const blur = Math.abs(Math.sin(propPhase));
+  ctx.strokeStyle = "rgba(58,44,26,"+(0.5+0.4*blur)+")";
+  ctx.lineWidth = 1.4;
+  for(const yo of [-0.4*m, -1.2*m]){
+    ctx.save();
+    ctx.translate(-1.05*m, yo);
+    ctx.rotate(propPhase);
+    ctx.beginPath();
+    ctx.moveTo(0,-0.32*m); ctx.lineTo(0,0.32*m);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Stall indicator: tiny shake
+  if(S.stalled && !S.onRail){
+    ctx.translate((Math.random()-.5)*3, (Math.random()-.5)*3);
+  }
+
+  ctx.restore();
+
+  // Skid mark / shadow
+  if(S.py < 0.5){
+    const sh = worldToScreen(S.px, 0);
+    ctx.fillStyle = "rgba(58,44,26,.18)";
+    ctx.beginPath();
+    ctx.ellipse(sh.x, sh.y+1, 1.6*s, 0.25*s, 0, 0, Math.PI*2);
+    ctx.fill();
+  }
+}
+
+function drawDate(){
+  // Top-right small date stamp
+  ctx.font = "11px ui-monospace, monospace";
+  ctx.fillStyle = "rgba(58,44,26,.55)";
+  const t = "1903.12.17 — KILL DEVIL HILLS, NC";
+  const w = ctx.measureText(t).width;
+  ctx.fillText(t, W-w-10, H-10);
+}
+
+//===== loop =====//
+let last = 0;
+function loop(now){
+  if(!last) last = now;
+  let dt = (now-last)/1000; last = now;
+  if(dt>0.05) dt = 0.05;
+  step(dt);
+  drawBackground();
+  drawRail();
+  if(!S.onRail) drawDistanceMarkers();
+  drawFlyer();
+  drawDate();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// Hide HUD until first start
+document.getElementById("hud").classList.add("hidden");
+</script>
+</body>
+</html>
