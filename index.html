@@ -43,6 +43,8 @@ html,body{height:100%;overflow:hidden;background:#cdb892;font-family:-apple-syst
     <div class="hud-box" id="hudL">
       <div data-en="DIST" data-ja="きょり">きょり</div>
       <div id="distVal" style="font-size:18px">0 ft</div>
+      <div style="margin-top:4px;opacity:.75;font-size:11px" data-en="ALT" data-ja="たかさ">たかさ</div>
+      <div id="altVal" style="font-size:14px">0 ft</div>
     </div>
     <div class="hud-box right" id="hudR">
       <div data-en="TIME" data-ja="じかん">じかん</div>
@@ -145,6 +147,8 @@ const VY_LERP = 4.5;            // vy target tracking
 const STALL_VY_DROP = 11;       // m/s² loss when stalled
 const LAUNCH_VY = 2.2;          // initial vy off the rail
 const GROUND_EFFECT_H = 2.5;    // meters: ground effect zone
+const CEILING_M = 30;           // hard altitude cap (rare to reach)
+const ALT_EXAG = 1.6;           // altitude visual exaggeration (px = scale * ALT_EXAG per meter)
 
 // Game state
 const S = {
@@ -179,12 +183,10 @@ function reset(){
   S.cameraX = 0;
   S.flightStartT = 0;
   S.flightStartX = 0;
-  S.gustCooldown = 3.0;     // first gust ~3s after takeoff
-  S.gustWarnTime = 0;
-  S.gustTime = 0;
-  S.gustActiveTotal = 0;
-  S.gustStrength = 0;
-  S.gustImpending = false;
+  S.event = null;            // current event {type, phase, time, ...}
+  S.eventCooldown = 3.0;     // first event ~3s after takeoff
+  S.bird = null;             // {x, y, t} for bird flock
+  S.cameraFlash = 0;         // visual flash at 120ft milestone
   S.lastMilestone = 0;
   S.milestoneText = "";
   S.milestoneFade = 0;
@@ -235,6 +237,7 @@ function step(dt){
     }
     document.getElementById("distVal").textContent = "0 ft";
     document.getElementById("timeVal").textContent = "0.0 s";
+    document.getElementById("altVal").textContent = "0 ft";
     updateWarning();
     return;
   }
@@ -243,25 +246,36 @@ function step(dt){
   // Cruise speed
   S.vx += (CRUISE_VX - S.vx) * 0.8 * dt;
 
-  // Wind gust scheduler — discrete events with warning
-  S.gustCooldown = Math.max(0, S.gustCooldown - dt);
-  S.gustWarnTime = Math.max(0, S.gustWarnTime - dt);
-  S.gustTime = Math.max(0, S.gustTime - dt);
-  if(S.gustCooldown <= 0 && S.gustTime <= 0 && !S.gustImpending){
-    S.gustImpending = true;
-    S.gustWarnTime = 0.7;
-    S.gustStrength = (Math.random() < 0.55 ? 1 : -1) * (15 + Math.random() * 10);
-    S.gustCooldown = 5 + Math.random() * 4;
+  // Event scheduler — drives gust / updraft / sputter / birds
+  S.eventCooldown = Math.max(0, S.eventCooldown - dt);
+  if(!S.event && S.eventCooldown <= 0){
+    scheduleEvent();
+    S.eventCooldown = 4 + Math.random() * 3;
   }
-  if(S.gustImpending && S.gustWarnTime <= 0.001){
-    S.gustImpending = false;
-    S.gustTime = 0.9;
-    S.gustActiveTotal = 0.9;
+  if(S.event){
+    S.event.time -= dt;
+    if(S.event.phase === "warn" && S.event.time <= 0){
+      S.event.phase = "active";
+      S.event.time = S.event.activeTotal;
+    } else if(S.event.phase === "active"){
+      applyEvent(S.event, dt);
+      if(S.event.time <= 0) S.event = null;
+    }
   }
-  if(S.gustTime > 0){
-    const phase = 1 - S.gustTime / S.gustActiveTotal;
-    const envelope = Math.sin(phase * Math.PI);
-    S.pitchRate += S.gustStrength * envelope * dt;
+  // Birds animation (independent of event end — birds keep flying past)
+  if(S.bird){
+    S.bird.t += dt;
+    S.bird.x -= 9 * dt;     // birds fly left relative to plane (head-on)
+    if(S.bird.x < S.px - 30) S.bird = null;
+    else {
+      // Collision: if plane within ~1m of bird position, shake pitch
+      const dx = Math.abs(S.px - S.bird.x);
+      const dy = Math.abs(S.py - S.bird.y);
+      if(dx < 1.2 && dy < 1.2 && !S.bird.hit){
+        S.bird.hit = true;
+        S.pitchRate += (Math.random()-0.5) * 50;
+      }
+    }
   }
 
   // Player input -> pitch rate target (with momentum / lag)
@@ -304,8 +318,8 @@ function step(dt){
   S.py += S.vy * dt;
   S.px += S.vx * dt;
 
-  // Ceiling — Wright Flyer stayed low (~10 ft)
-  if(S.py > 8){ S.py = 8; if(S.vy>0) S.vy = 0; }
+  // Ceiling — high enough that you only hit it on great rhythm runs
+  if(S.py > CEILING_M){ S.py = CEILING_M; if(S.vy>0) S.vy = 0; }
 
   // Ground collision
   if(S.py <= 0.04){
@@ -337,19 +351,82 @@ function step(dt){
         ? {120:"オービル 1かいめ ★",175:"ウィルバー 2かいめ ★",200:"オービル 3かいめ ★",500:"500フィート！",852:"ウィルバー 4かいめ ★★★",1000:"1000フィート！"}[m]
         : {120:"Flight 1 ★",175:"Flight 2 ★",200:"Flight 3 ★",500:"500 ft!",852:"Flight 4 ★★★",1000:"1000 ft!"}[m]);
       S.milestoneFade = 1.6;
+      if(m === 120) S.cameraFlash = 1.0;   // John T. Daniels' photo moment
     }
   }
 
+  document.getElementById("altVal").textContent = Math.floor(S.py * M_TO_FT) + " ft";
+
   updateWarning();
+}
+
+function scheduleEvent(){
+  // Roll event type with weights. Birds & sputter are rarer than gust/updraft.
+  const r = Math.random();
+  let type;
+  if(r < 0.35)      type = "gust";
+  else if(r < 0.65) type = "updraft";
+  else if(r < 0.85) type = "sputter";
+  else              type = "birds";
+
+  const ev = { type, phase: "warn", time: 0.7 };
+  if(type === "gust"){
+    ev.activeTotal = 0.9;
+    ev.strength = (Math.random() < 0.55 ? 1 : -1) * (14 + Math.random() * 10);
+  } else if(type === "updraft"){
+    ev.activeTotal = 1.6;
+    ev.spawnX = S.px + 22 + Math.random() * 18;
+    ev.colHeight = 16 + Math.random() * 8;
+  } else if(type === "sputter"){
+    ev.activeTotal = 1.3;
+  } else if(type === "birds"){
+    // Birds spawn ahead at the plane's altitude band
+    ev.activeTotal = 0.4;  // warning phase only — birds animate independently
+    S.bird = {
+      x: S.px + 22 + Math.random() * 10,
+      y: Math.max(2, Math.min(CEILING_M-3, S.py + (Math.random()-0.5) * 4)),
+      t: 0, hit: false
+    };
+  }
+  S.event = ev;
+}
+
+function applyEvent(e, dt){
+  if(e.type === "gust"){
+    const phase = 1 - e.time / e.activeTotal;
+    const envelope = Math.sin(phase * Math.PI);
+    S.pitchRate += e.strength * envelope * dt;
+  } else if(e.type === "updraft"){
+    // Lift bonus while plane is near the column's x position
+    const dx = Math.abs(S.px - e.spawnX);
+    if(dx < 6){
+      const factor = 1 - dx/6;
+      S.vy += factor * 4.0 * dt;
+    }
+  } else if(e.type === "sputter"){
+    // Engine stutter: drag the plane briefly
+    S.vx -= 2.0 * dt;
+  }
 }
 
 function updateWarning(){
   const w = document.getElementById("stallWarn");
   if(S.onRail){ w.style.display = "none"; return; }
-  if(S.gustWarnTime > 0){
+  if(S.event && S.event.phase === "warn"){
     w.style.display = "block";
-    w.style.background = "#2c5cba";
-    w.textContent = lang === "ja" ? "つよい かぜ！" : "GUST!";
+    if(S.event.type === "gust"){
+      w.style.background = "#2c5cba";
+      w.textContent = lang === "ja" ? "つよい かぜ！" : "GUST!";
+    } else if(S.event.type === "updraft"){
+      w.style.background = "#2a8a3f";
+      w.textContent = lang === "ja" ? "じょうしょう気流！" : "UPDRAFT!";
+    } else if(S.event.type === "sputter"){
+      w.style.background = "#7a5a2a";
+      w.textContent = lang === "ja" ? "エンジン不調！" : "ENGINE!";
+    } else if(S.event.type === "birds"){
+      w.style.background = "#3a2c1a";
+      w.textContent = lang === "ja" ? "とり！" : "BIRDS!";
+    }
     return;
   }
   if(S.stalled){
@@ -409,7 +486,7 @@ function worldToScreen(wx, wy){
   const groundY = H - Math.max(70, H*0.18);
   return {
     x: wx*s - S.cameraX,
-    y: groundY - wy*s,
+    y: groundY - wy*s*ALT_EXAG,
     s
   };
 }
@@ -738,28 +815,107 @@ function drawMilestone(){
   ctx.restore();
 }
 
-function drawGustVisual(){
-  // Tint the leading edge of incoming wind during warn / active
+function drawEventVisuals(){
   if(S.onRail) return;
-  const intensity = S.gustWarnTime > 0
-    ? (1 - S.gustWarnTime/0.7) * 0.6
-    : (S.gustTime > 0 ? Math.sin((1 - S.gustTime/S.gustActiveTotal) * Math.PI) * 0.7 : 0);
-  if(intensity <= 0) return;
-  // wind from the left if positive strength (pitch-up), right if negative
-  const fromLeft = S.gustStrength > 0;
-  const grad = ctx.createLinearGradient(fromLeft ? 0 : W, 0, fromLeft ? W*0.4 : W*0.6, 0);
-  grad.addColorStop(0, "rgba(255,255,255," + (0.18*intensity) + ")");
-  grad.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.fillStyle = grad;
+  const e = S.event;
+  if(!e) return;
+
+  // Compute intensity for warn vs active phases
+  const inWarn = e.phase === "warn";
+  const intensity = inWarn
+    ? (1 - e.time/0.7) * 0.6
+    : Math.sin((1 - e.time/e.activeTotal) * Math.PI) * 0.85;
+
+  if(e.type === "gust" && intensity > 0){
+    const fromLeft = e.strength > 0;
+    const grad = ctx.createLinearGradient(fromLeft ? 0 : W, 0, fromLeft ? W*0.4 : W*0.6, 0);
+    grad.addColorStop(0, "rgba(255,255,255," + (0.18*intensity) + ")");
+    grad.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = "rgba(255,255,255," + (0.55*intensity) + ")";
+    ctx.lineWidth = 1.2;
+    for(let i=0;i<14;i++){
+      const yy = (i*53 + (S.t*180)%50) % H;
+      const x0 = fromLeft ? 0 : W;
+      const x1 = fromLeft ? 30 + (i%4)*8 : W - 30 - (i%4)*8;
+      ctx.beginPath(); ctx.moveTo(x0, yy); ctx.lineTo(x1, yy); ctx.stroke();
+    }
+  } else if(e.type === "updraft"){
+    // Stationary column at e.spawnX from ground up to colHeight
+    const groundY = screenGroundY();
+    const top = worldToScreen(e.spawnX, e.colHeight);
+    const bot = worldToScreen(e.spawnX, 0);
+    if(bot.x > -40 && bot.x < W+40){
+      const wob = Math.sin(S.t * 6) * 4;
+      // gradient column
+      const grad = ctx.createLinearGradient(bot.x, bot.y, bot.x, top.y);
+      grad.addColorStop(0, "rgba(255,212,121,0)");
+      grad.addColorStop(1, "rgba(255,212,121," + (0.5 + 0.3*intensity) + ")");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.moveTo(bot.x - 14 + wob*0.3, bot.y);
+      ctx.quadraticCurveTo(bot.x + wob, (bot.y+top.y)/2, top.x - 8 - wob*0.5, top.y);
+      ctx.lineTo(top.x + 8 + wob*0.5, top.y);
+      ctx.quadraticCurveTo(bot.x - wob, (bot.y+top.y)/2, bot.x + 14 + wob*0.3, bot.y);
+      ctx.closePath();
+      ctx.fill();
+      // wavy lines inside
+      ctx.strokeStyle = "rgba(255,170,60," + (0.7) + ")";
+      ctx.lineWidth = 1.2;
+      for(let k=0;k<3;k++){
+        ctx.beginPath();
+        for(let yy = bot.y; yy > top.y; yy -= 6){
+          const ww = Math.sin((yy + S.t*200 + k*40) * 0.05) * 6;
+          if(yy === bot.y) ctx.moveTo(bot.x + ww + (k-1)*5, yy);
+          else ctx.lineTo(bot.x + ww + (k-1)*5, yy);
+        }
+        ctx.stroke();
+      }
+    }
+  } else if(e.type === "sputter"){
+    // Black smoke puffs trailing from engine
+    const p = worldToScreen(S.px - 1.0, S.py + 0.4);
+    for(let i=0;i<6;i++){
+      const age = i * 0.15;
+      const xo = -i*4 - (S.t*60)%6;
+      const yo = -i*1.5;
+      ctx.fillStyle = "rgba(40,30,20," + (0.55 - i*0.08) + ")";
+      ctx.beginPath();
+      ctx.arc(p.x + xo, p.y + yo, 3 + i*0.6, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+}
+
+function drawBird(){
+  if(!S.bird) return;
+  const p = worldToScreen(S.bird.x, S.bird.y);
+  if(p.x < -30 || p.x > W+30) return;
+  const flap = Math.sin(S.t * 16);
+  ctx.strokeStyle = S.bird.hit ? "#c0392b" : "#3a2c1a";
+  ctx.lineWidth = 2;
+  // Lead bird (V apex)
+  for(const off of [{dx:0,dy:0},{dx:-12,dy:5},{dx:12,dy:5},{dx:-22,dy:9},{dx:22,dy:9}]){
+    const cx = p.x + off.dx, cy = p.y + off.dy;
+    ctx.beginPath();
+    ctx.moveTo(cx-6, cy + 2 - flap);
+    ctx.lineTo(cx, cy);
+    ctx.lineTo(cx+6, cy + 2 - flap);
+    ctx.stroke();
+  }
+}
+
+function drawCameraFlash(){
+  if(S.cameraFlash <= 0) return;
+  const a = Math.min(1, S.cameraFlash * 2);
+  ctx.fillStyle = "rgba(255,255,255," + (a*0.55) + ")";
   ctx.fillRect(0, 0, W, H);
-  // streaks
-  ctx.strokeStyle = "rgba(255,255,255," + (0.55*intensity) + ")";
-  ctx.lineWidth = 1.2;
-  for(let i=0;i<14;i++){
-    const yy = (i*53 + (S.t*180)%50) % H;
-    const x0 = fromLeft ? 0 : W;
-    const x1 = fromLeft ? 30 + (i%4)*8 : W - 30 - (i%4)*8;
-    ctx.beginPath(); ctx.moveTo(x0, yy); ctx.lineTo(x1, yy); ctx.stroke();
+  if(S.cameraFlash > 0.6){
+    ctx.font = "bold 16px -apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(58,44,26,0.9)";
+    ctx.fillText(lang==="ja" ? "ジョン・T・ダニエルズ撮影" : "Photographed by John T. Daniels", W/2, H*0.45);
   }
 }
 
@@ -770,11 +926,14 @@ function loop(now){
   let dt = (now-last)/1000; last = now;
   if(dt>0.05) dt = 0.05;
   step(dt);
+  if(S.cameraFlash > 0) S.cameraFlash = Math.max(0, S.cameraFlash - dt);
   drawBackground();
-  drawGustVisual();
+  drawEventVisuals();
   drawRail();
   if(!S.onRail) drawDistanceMarkers();
+  drawBird();
   drawFlyer();
+  drawCameraFlash();
   drawDate();
   drawPitchGauge();
   drawMilestone();
