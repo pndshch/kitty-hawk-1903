@@ -58,8 +58,8 @@ html,body{height:100%;overflow:hidden;background:#cdb892;font-family:-apple-syst
        data-ja="1903ねん 12がつ 17にち 10:35<br>はじめての うごく ひこうき">1903ねん 12がつ 17にち 10:35<br>はじめての うごく ひこうき</p>
     <div class="body" data-en="The Wright Flyer is on a wooden launching rail at Kill Devil Hills. A 27 mph headwind blows in from the Atlantic. The forward elevator makes the plane <strong>pitch-unstable</strong> — it wants to porpoise. Keep it level and you fly. Lose pitch and you stall."
                     data-ja="ライト兄弟（きょうだい）の <strong>「フライヤー号」</strong> が レールに のっている。<strong>27マイル の むかい風</strong>。まえに ある かじ で 上下（じょうげ）が ふらふら——ピッチが ぐらつくと <strong>しっそく</strong>。じっと 水平（すいへい）を たもって とぼう。">ライト兄弟（きょうだい）の <strong>「フライヤー号」</strong> が レールに のっている。<strong>27マイル の むかい風</strong>。まえに ある かじ で 上下（じょうげ）が ふらふら——ピッチが ぐらつくと <strong>しっそく</strong>。じっと 水平（すいへい）を たもって とぼう。</div>
-    <div class="controls" data-en="◉  TAP &amp; HOLD to PITCH UP<br>RELEASE to NOSE DOWN"
-                          data-ja="◉ おしっぱなし → きしゅ あげ<br>はなす → きしゅ さげ">◉ おしっぱなし → きしゅ あげ<br>はなす → きしゅ さげ</div>
+    <div class="controls" data-en="◉ TAP to PITCH UP &nbsp;/&nbsp; RELEASE to NOSE DOWN<br><b>HOLD = STALL.</b> Find a rhythm. Watch for gusts."
+                          data-ja="◉ おす → きしゅ あげ ／ はなす → さげ<br><b>おしっぱなし は しっそく！</b> リズムよく。かぜに ちゅうい。">◉ おす → きしゅ あげ ／ はなす → さげ<br><b>おしっぱなし は しっそく！</b> リズムよく。かぜに ちゅうい。</div>
     <div class="targets">
       <div data-en="<span class='y'>120 ft</span> — Orville, Flight 1 (12 sec)" data-ja="<span class='y'>120フィート</span>（37m）— オービル, 1かいめ（12びょう）">
         <span class='y'>120フィート</span>（37m）— オービル, 1かいめ（12びょう）
@@ -126,17 +126,25 @@ window.addEventListener("resize",resize); resize();
 //===== world & physics =====//
 // Units: meters and seconds internally. Display feet.
 // Coordinate: world x increases as plane goes right; y is altitude (positive = up).
+// Pitch-rate model: holding pushes pitch UP at a constant rate. Reach ~20° -> stall.
+// Releasing pushes pitch DOWN. Stable flight requires rhythmic press/release.
 const M_TO_FT = 3.28084;
-const RAIL_LEN_M = 18;      // launching rail in meters (~60 ft)
-const RAIL_THRUST = 6.0;    // accel down rail (m/s²)
-const CRUISE_VX = 6.4;      // ground speed once airborne (~14 mph; Wright record was similar)
-const CRUISE_BUILD = 1.5;   // /sec rate at which vx settles toward CRUISE_VX
-const TARGET_VY_UP = 3.4;   // target vy when player holds (climb)
-const TARGET_VY_DOWN = -2.6; // target vy on release (sink)
-const VY_LERP = 3.0;        // /sec target tracking rate
-const STALL_PITCH = 22;     // degrees - above this, lift collapses
-const PITCH_FROM_VY = 4.0;  // converts vy (m/s) to pitch angle factor
-const LAUNCH_VY = 3.0;      // initial upward velocity off the rail
+const RAIL_LEN_M = 18;          // launching rail (~60 ft)
+const RAIL_THRUST = 5.8;
+const CRUISE_VX = 6.8;          // m/s ground speed once airborne
+const PITCH_UP_RATE = 25;       // deg/s while pressing (target rate)
+const PITCH_DOWN_RATE = 22;     // deg/s while releasing
+const PITCH_RATE_LERP = 7;      // smoothing on rate transitions
+const PITCH_INSTABILITY = 0.16; // /s - canard positive feedback (Wright Flyer was unstable)
+const PITCH_DAMP = 0.5;         // air resistance on pitch rate
+const STALL_PITCH = 20;         // hard stall above this
+const STALL_RECOVER = 10;       // exit stall below this
+const LEVEL_PITCH = 2;          // pitch where vy ~ 0
+const PITCH_TO_VY_GAIN = 0.22;  // vy per degree of pitch (above LEVEL_PITCH)
+const VY_LERP = 4.5;            // vy target tracking
+const STALL_VY_DROP = 11;       // m/s² loss when stalled
+const LAUNCH_VY = 2.2;          // initial vy off the rail
+const GROUND_EFFECT_H = 2.5;    // meters: ground effect zone
 
 // Game state
 const S = {
@@ -162,15 +170,24 @@ function reset(){
   S.px = 4; S.py = 0.05; // sit on rail
   S.vx = 0; S.vy = 0;
   S.pitch = 1;
+  S.pitchRate = 0;
   S.pressing = false;
   S.onRail = true;
   S.stalled = false;
   S.stallTime = 0;
+  S.stallBuildup = 0;
   S.cameraX = 0;
   S.flightStartT = 0;
   S.flightStartX = 0;
-  S.pitchOscPhase = 0;
-  S.pendingGust = 0;
+  S.gustCooldown = 3.0;     // first gust ~3s after takeoff
+  S.gustWarnTime = 0;
+  S.gustTime = 0;
+  S.gustActiveTotal = 0;
+  S.gustStrength = 0;
+  S.gustImpending = false;
+  S.lastMilestone = 0;
+  S.milestoneText = "";
+  S.milestoneFade = 0;
   document.getElementById("hud").classList.remove("hidden");
   document.getElementById("startScreen").classList.add("hidden");
   document.getElementById("endScreen").classList.add("hidden");
@@ -194,90 +211,166 @@ window.addEventListener("keyup",e=>{ if(e.code==="Space"||e.code==="ArrowUp") re
 
 //===== physics step =====//
 function step(dt){
-  if(S.phase==="menu") return;
+  if(S.phase==="menu" || S.phase==="done") return;
 
   S.t += dt;
+  S.milestoneFade = Math.max(0, S.milestoneFade - dt);
 
   //------ ON RAIL: accelerate down launching track ------//
   if(S.onRail){
     S.vx += RAIL_THRUST * dt;
-    S.vx -= S.vx*0.04*dt;       // small rail friction
+    S.vx -= S.vx*0.04*dt;
     S.px += S.vx*dt;
     S.py = 0.05;
     S.vy = 0;
     S.pitch = 1;
+    S.pitchRate = 0;
     if(S.px >= RAIL_LEN_M){
       S.onRail = false;
       S.flightStartT = S.t;
       S.flightStartX = S.px;
       S.vy = LAUNCH_VY;
+      S.pitch = 6;        // gentle nose-up after launch (above LEVEL_PITCH)
+      S.pitchRate = 0;
     }
     document.getElementById("distVal").textContent = "0 ft";
     document.getElementById("timeVal").textContent = "0.0 s";
+    updateWarning();
     return;
   }
 
-  //------ AIRBORNE: target-tracking arcade model ------//
-  // Settle ground speed toward CRUISE_VX
-  S.vx += (CRUISE_VX - S.vx) * CRUISE_BUILD * dt;
+  //------ AIRBORNE: pitch-rate model ------//
+  // Cruise speed
+  S.vx += (CRUISE_VX - S.vx) * 0.8 * dt;
 
-  // Random wind gusts: occasional, perturb vy
-  if(Math.random() < 0.018) S.pendingGust = (Math.random()-0.5) * 2.5;
-  S.pendingGust = (S.pendingGust||0) * 0.92;
-
-  // Target vy depends on press. Pressing lifts plane; releasing lets it sink.
-  const targetVy = S.pressing ? TARGET_VY_UP : TARGET_VY_DOWN;
-  S.vy += (targetVy - S.vy) * VY_LERP * dt;
-  S.vy += S.pendingGust * dt * 1.0;
-  S.vy = Math.max(-6, Math.min(5.5, S.vy));
-
-  // Visual pitch follows climb direction (clamped softly)
-  const visualPitch = Math.max(-25, Math.min(28, S.vy * PITCH_FROM_VY));
-  S.pitch += (visualPitch - S.pitch) * 7.0 * dt;
-
-  // Stall: only triggers from explicit gust spikes (vy > 5.0 sustained)
-  const stalled = S.vy > 4.8 && S.stallBuildup > 0.5;
-  S.stallBuildup = (S.stallBuildup||0) + (S.vy > 4.5 ? dt : -dt*1.5);
-  S.stallBuildup = Math.max(0, S.stallBuildup);
-  S.stalled = stalled;
-  if(stalled){
-    S.stallTime += dt;
-    S.vy -= 6 * dt;  // lift collapse
-  } else {
-    S.stallTime = Math.max(0, S.stallTime - dt*0.6);
+  // Wind gust scheduler — discrete events with warning
+  S.gustCooldown = Math.max(0, S.gustCooldown - dt);
+  S.gustWarnTime = Math.max(0, S.gustWarnTime - dt);
+  S.gustTime = Math.max(0, S.gustTime - dt);
+  if(S.gustCooldown <= 0 && S.gustTime <= 0 && !S.gustImpending){
+    S.gustImpending = true;
+    S.gustWarnTime = 0.7;
+    S.gustStrength = (Math.random() < 0.55 ? 1 : -1) * (15 + Math.random() * 10);
+    S.gustCooldown = 5 + Math.random() * 4;
+  }
+  if(S.gustImpending && S.gustWarnTime <= 0.001){
+    S.gustImpending = false;
+    S.gustTime = 0.9;
+    S.gustActiveTotal = 0.9;
+  }
+  if(S.gustTime > 0){
+    const phase = 1 - S.gustTime / S.gustActiveTotal;
+    const envelope = Math.sin(phase * Math.PI);
+    S.pitchRate += S.gustStrength * envelope * dt;
   }
 
+  // Player input -> pitch rate target (with momentum / lag)
+  const targetRate = S.pressing ? +PITCH_UP_RATE : -PITCH_DOWN_RATE;
+  S.pitchRate += (targetRate - S.pitchRate) * PITCH_RATE_LERP * dt;
+
+  // Wright Flyer instability: pitch deviation from level grows on its own
+  S.pitchRate += (S.pitch - LEVEL_PITCH) * PITCH_INSTABILITY * dt;
+
+  // Mild damping
+  S.pitchRate -= S.pitchRate * PITCH_DAMP * dt;
+
+  S.pitch += S.pitchRate * dt;
+  S.pitch = Math.max(-32, Math.min(38, S.pitch));
+
+  // Stall transitions
+  if(!S.stalled && S.pitch > STALL_PITCH){
+    S.stalled = true;
+  } else if(S.stalled && S.pitch < STALL_RECOVER){
+    S.stalled = false;
+  }
+
+  // Vertical velocity
+  if(S.stalled){
+    S.vy -= STALL_VY_DROP * dt;
+    S.stallTime += dt;
+  } else {
+    const speedFactor = Math.max(0.4, S.vx / CRUISE_VX);
+    const targetVy = (S.pitch - LEVEL_PITCH) * PITCH_TO_VY_GAIN * speedFactor;
+    S.vy += (targetVy - S.vy) * VY_LERP * dt;
+    S.stallTime = Math.max(0, S.stallTime - dt);
+  }
+
+  // Ground effect — extra lift in the ground-effect zone (real Wright Flyer benefited)
+  if(S.py < GROUND_EFFECT_H && !S.stalled){
+    S.vy += (GROUND_EFFECT_H - S.py) * 1.4 * dt;
+  }
+
+  S.vy = Math.max(-7, Math.min(6, S.vy));
   S.py += S.vy * dt;
   S.px += S.vx * dt;
+
+  // Ceiling — Wright Flyer stayed low (~10 ft)
+  if(S.py > 8){ S.py = 8; if(S.vy>0) S.vy = 0; }
 
   // Ground collision
   if(S.py <= 0.04){
     S.py = 0;
     const airborneT = S.t - S.flightStartT;
-    if(S.vy < -3.5 || S.stallTime > 0.5){
-      endRun("crash");
-    } else if(airborneT > 0.4){
-      endRun("land");
+    if(airborneT > 0.4){
+      const harshLanding = S.vy < -2.2 || S.stalled || S.pitch > 14 || S.pitch < -12;
+      endRun(harshLanding ? "crash" : "land");
     } else {
       S.vy = 0;
     }
   }
-
-  // Ceiling — Wright Flyer stayed under ~10 ft
-  if(S.py > 7){ S.py = 7; if(S.vy>0) S.vy = 0; }
 
   // Camera
   const wx = worldToScreenScale();
   const targetCam = Math.max(0, S.px*wx - W*0.30);
   S.cameraX += (targetCam - S.cameraX) * 0.12;
 
-  // HUD
+  // HUD + milestones
   const distFt = Math.max(0, (S.px - (S.flightStartX || RAIL_LEN_M)) * M_TO_FT);
   const flightTime = S.t - S.flightStartT;
   document.getElementById("distVal").textContent = Math.floor(distFt) + " ft";
   document.getElementById("timeVal").textContent = flightTime.toFixed(1) + " s";
-  const sw = document.getElementById("stallWarn");
-  sw.style.display = stalled ? "block" : "none";
+
+  for(const m of [120, 175, 200, 500, 852, 1000]){
+    if(distFt >= m && S.lastMilestone < m){
+      S.lastMilestone = m;
+      S.milestoneText = (lang==="ja"
+        ? {120:"オービル 1かいめ ★",175:"ウィルバー 2かいめ ★",200:"オービル 3かいめ ★",500:"500フィート！",852:"ウィルバー 4かいめ ★★★",1000:"1000フィート！"}[m]
+        : {120:"Flight 1 ★",175:"Flight 2 ★",200:"Flight 3 ★",500:"500 ft!",852:"Flight 4 ★★★",1000:"1000 ft!"}[m]);
+      S.milestoneFade = 1.6;
+    }
+  }
+
+  updateWarning();
+}
+
+function updateWarning(){
+  const w = document.getElementById("stallWarn");
+  if(S.onRail){ w.style.display = "none"; return; }
+  if(S.gustWarnTime > 0){
+    w.style.display = "block";
+    w.style.background = "#2c5cba";
+    w.textContent = lang === "ja" ? "つよい かぜ！" : "GUST!";
+    return;
+  }
+  if(S.stalled){
+    w.style.display = "block";
+    w.style.background = "#c0392b";
+    w.textContent = lang === "ja" ? "しっそく！" : "STALL!";
+    return;
+  }
+  if(S.pitch > 16){
+    w.style.display = "block";
+    w.style.background = "#e67e22";
+    w.textContent = lang === "ja" ? "あげすぎ！" : "TOO HIGH!";
+    return;
+  }
+  if(S.pitch < -10){
+    w.style.display = "block";
+    w.style.background = "#e67e22";
+    w.textContent = lang === "ja" ? "さげすぎ！" : "DIVING!";
+    return;
+  }
+  w.style.display = "none";
 }
 
 function endRun(kind){
@@ -571,6 +664,105 @@ function drawDate(){
   ctx.fillText(t, W-w-10, H-10);
 }
 
+function drawPitchGauge(){
+  if(S.onRail || S.phase === "menu" || S.phase === "done") return;
+  const r = 26;
+  const cx = W/2;
+  const cy = H - 56;
+
+  ctx.save();
+  ctx.translate(cx, cy);
+
+  // bezel shadow
+  ctx.fillStyle = "rgba(58,44,26,.55)";
+  ctx.beginPath(); ctx.arc(0, 2, r+2, 0, Math.PI*2); ctx.fill();
+
+  // clipped face
+  ctx.save();
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2); ctx.clip();
+  const stallish = S.stalled;
+  const pitchOff = (S.pitch / 30) * r * 1.2; // displacement of horizon
+  // sky
+  ctx.fillStyle = stallish ? "#c0392b" : "#7fa9c6";
+  ctx.fillRect(-r, -r, 2*r, r + pitchOff);
+  // ground
+  ctx.fillStyle = stallish ? "#5a2a1a" : "#a48962";
+  ctx.fillRect(-r, pitchOff, 2*r, r);
+  // horizon line
+  ctx.strokeStyle = "#fff";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(-r, pitchOff); ctx.lineTo(r, pitchOff); ctx.stroke();
+  // pitch ladder ticks
+  ctx.strokeStyle = "rgba(255,255,255,.55)";
+  ctx.lineWidth = 1;
+  for(const ang of [-20, -10, 10, 20]){
+    const yy = pitchOff - (ang/30)*r*1.2;
+    if(Math.abs(yy) > r-2) continue;
+    ctx.beginPath(); ctx.moveTo(-7, yy); ctx.lineTo(7, yy); ctx.stroke();
+  }
+  ctx.restore();
+
+  // bezel
+  ctx.strokeStyle = "rgba(58,44,26,.95)";
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2); ctx.stroke();
+
+  // stall threshold marks (red ticks at +20°)
+  const stallY = -(STALL_PITCH/30) * r * 1.2;
+  ctx.strokeStyle = "#c0392b";
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(-r-4, stallY); ctx.lineTo(-r+3, stallY); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(r+4, stallY); ctx.lineTo(r-3, stallY); ctx.stroke();
+
+  // plane reference (fixed wings)
+  ctx.strokeStyle = "#ffd479";
+  ctx.lineWidth = 2.6;
+  ctx.beginPath(); ctx.moveTo(-12, 0); ctx.lineTo(-3, 0); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(3, 0); ctx.lineTo(12, 0); ctx.stroke();
+  ctx.fillStyle = "#ffd479";
+  ctx.beginPath(); ctx.arc(0, 0, 2, 0, Math.PI*2); ctx.fill();
+
+  ctx.restore();
+}
+
+function drawMilestone(){
+  if(S.milestoneFade <= 0 || !S.milestoneText) return;
+  const a = Math.min(1, S.milestoneFade / 0.5);
+  ctx.save();
+  ctx.font = "bold 22px -apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillStyle = "rgba(58,44,26," + (0.85*a) + ")";
+  ctx.fillRect(W/2 - 130, H*0.32 - 22, 260, 36);
+  ctx.fillStyle = "rgba(255,212,121," + a + ")";
+  ctx.fillText(S.milestoneText, W/2, H*0.32 + 4);
+  ctx.restore();
+}
+
+function drawGustVisual(){
+  // Tint the leading edge of incoming wind during warn / active
+  if(S.onRail) return;
+  const intensity = S.gustWarnTime > 0
+    ? (1 - S.gustWarnTime/0.7) * 0.6
+    : (S.gustTime > 0 ? Math.sin((1 - S.gustTime/S.gustActiveTotal) * Math.PI) * 0.7 : 0);
+  if(intensity <= 0) return;
+  // wind from the left if positive strength (pitch-up), right if negative
+  const fromLeft = S.gustStrength > 0;
+  const grad = ctx.createLinearGradient(fromLeft ? 0 : W, 0, fromLeft ? W*0.4 : W*0.6, 0);
+  grad.addColorStop(0, "rgba(255,255,255," + (0.18*intensity) + ")");
+  grad.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+  // streaks
+  ctx.strokeStyle = "rgba(255,255,255," + (0.55*intensity) + ")";
+  ctx.lineWidth = 1.2;
+  for(let i=0;i<14;i++){
+    const yy = (i*53 + (S.t*180)%50) % H;
+    const x0 = fromLeft ? 0 : W;
+    const x1 = fromLeft ? 30 + (i%4)*8 : W - 30 - (i%4)*8;
+    ctx.beginPath(); ctx.moveTo(x0, yy); ctx.lineTo(x1, yy); ctx.stroke();
+  }
+}
+
 //===== loop =====//
 let last = 0;
 function loop(now){
@@ -579,10 +771,13 @@ function loop(now){
   if(dt>0.05) dt = 0.05;
   step(dt);
   drawBackground();
+  drawGustVisual();
   drawRail();
   if(!S.onRail) drawDistanceMarkers();
   drawFlyer();
   drawDate();
+  drawPitchGauge();
+  drawMilestone();
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
