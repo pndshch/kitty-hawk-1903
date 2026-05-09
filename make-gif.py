@@ -39,48 +39,40 @@ async def main():
             await capture(page, 130)
             await page.wait_for_timeout(60)
 
-        # Click START. Then drive S.pressing directly so we get a clean rhythm
-        # demo (canvas pointer events are flaky in headless).
+        # Click START. Then run a press/release rhythm INSIDE the page so the
+        # cadence is independent of how long screenshots take. 480ms press /
+        # 380ms release flies decently in the new physics.
         await page.click("#startBtn")
         await page.wait_for_timeout(80)
+        await page.evaluate("""
+          window._stopPulse = false;
+          (function pulse(){
+            if(window._stopPulse) return;
+            S.pressing = true;
+            setTimeout(() => {
+              if(window._stopPulse) return;
+              S.pressing = false;
+              setTimeout(pulse, 380);
+            }, 480);
+          })();
+        """)
 
-        # Rail acceleration — pressing not yet engaged
-        for _ in range(4):
+        # Capture flight — alternating physics keeps the plane bobbing
+        for i in range(40):
             await capture(page, 130)
-            await page.wait_for_timeout(120)
+            await page.wait_for_timeout(140)
+            phase = await page.evaluate("S.phase")
+            if phase == "done":
+                break
+            # Trigger a visible gust about midway through
+            if i == 14:
+                await page.evaluate(
+                    "S.gustImpending=true; S.gustWarnTime=0.6; "
+                    "S.gustStrength=18; S.gustCooldown=8;"
+                )
 
-        # Once airborne, alternate press/release. Slight press-bias keeps the
-        # plane gently climbing for visible bobbing.
-        async def pulse(pressed: bool, frames: int, frame_ms: int = 120):
-            await page.evaluate(f"S.pressing = {'true' if pressed else 'false'}")
-            for _ in range(frames):
-                await capture(page, 130)
-                await page.wait_for_timeout(frame_ms)
-                phase = await page.evaluate("S.phase")
-                if phase == "done":
-                    return True
-            return False
-
-        # 4 rhythm cycles: ~500ms press / ~400ms release
-        for _ in range(4):
-            if await pulse(True, 4): break
-            if await pulse(False, 3): break
-
-        # Trigger a visible gust late in the demo
-        await page.evaluate(
-            "S.gustImpending=true; S.gustWarnTime=0.6; "
-            "S.gustStrength=18; S.gustCooldown=8;"
-        )
-        if not await pulse(True, 3):
-            if not await pulse(False, 4):
-                # Final descent
-                await page.evaluate("S.pressing = false;")
-                for _ in range(15):
-                    await capture(page, 130)
-                    await page.wait_for_timeout(140)
-                    phase = await page.evaluate("S.phase")
-                    if phase == "done":
-                        break
+        # Stop the rhythm; let the plane settle / land
+        await page.evaluate("window._stopPulse = true; S.pressing = false;")
 
         # End screen
         await page.wait_for_timeout(400)
